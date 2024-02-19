@@ -3,7 +3,7 @@
 #   VisToole - AsTeR - tech@asterlab.pl             #
 #   Paweł Dorobek                                   #
 #                                                   #
-#   ver. 0.910      - 02.2024                       #
+#   ver. 0.900      - 01.2024                       #
 #                                                   #
 #####################################################
 
@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from matplotlib.widgets import Button, CheckButtons
 import matplotlib.transforms as transforms
+from matplotlib.transforms import Bbox
 import matplotlib.pyplot as plt
 
 
@@ -23,10 +24,10 @@ class FIFO():
         err = 1
         if 'fifo' in kwargs:
             if isinstance(kwargs['fifo'], list):
-                if len(kwargs['fifo']) ==  length:
+                if len(kwargs['fifo']) == length:
                     self._fifo = kwargs['fifo']
                     err = 0
-        if err:            
+        if err:
             self._fifo = [0 for i in range(length)]
 
         self.licz = -1
@@ -153,10 +154,8 @@ class CBoxy_mpl(CBoxy):
 
         self.fig = kwargs['fig']  # obligatory
         
-        if 'box_props' in kwargs:
-            box_props = kwargs['box_props']
-        else:
-            box_props = {}
+        box_props = kwargs.get('box_props', {})
+
 
         self.ax = self.fig.add_axes(box_bounds, **box_props)
         
@@ -172,6 +171,7 @@ class CBoxy_mpl(CBoxy):
 
         self.cid = kwargs.get('cid', '')
         self._enabled = kwargs.get('enabled', True)
+        self.click_ev_vis = kwargs.get('click_ev_vis', True)
 
         if not self._visible:
             self.clear_all()
@@ -193,23 +193,18 @@ class CBoxy_mpl(CBoxy):
 
         """
        
-        if event.button == 3:
+        if event.button == 3 and self.click_ev_vis:
         
             if not any(map(lambda x: x.get_window_extent().contains(event.x,
                                                                     event.y)
                                and x.get_visible(), self.fig.axes + self.zz)):
                 self.set_visible(not self.get_visible())
-        self.fig.canvas.draw_idle()
+            self.fig.canvas.draw_idle()
 
             
     def _on_pick(self, event):
-        """   pick handles function   """
-    
-        if event.mouseevent.button != 1:   #  left mouse button
-            return
-
         """
-        here we pick checkboxes 
+        here we pick CheckButtons but not checkboxes 
         event.artist is the ax axes of the corresponding element
         """               # new moving CheckButtons and buttons
         if event.artist == self.ax: 
@@ -219,7 +214,12 @@ class CBoxy_mpl(CBoxy):
             less_box   = event.artist.get_window_extent().expanded(0.9, 0.9)   
             if full_box.contains(event.mouseevent.x, event.mouseevent.y) and \
                 not less_box.contains(event.mouseevent.x, event.mouseevent.y):
-                self.box_move.drag(event)
+
+                if event.mouseevent.button == 1:
+                    self.box_move.drag(event)
+                else:
+                    self.clear_all()
+                    
 
     def get_bbox(self):  
         cx = self.ax.get_window_extent().get_points()  # disp
@@ -466,6 +466,84 @@ class MoveBox(MoveXY):
                                self.dxy[0], self.dxy[1]])
 
 
+class TextFrame(MoveXY):
+    def __init__(self, x, y, text, **kwargs):
+        super().__init__(**kwargs)
+
+        kwargs.pop('fig')
+        kwargs.pop('ax')
+
+
+        self.frame_bbox = kwargs.get('bbox', {})
+
+        self.frame = self.ax.text(x, y, text, **kwargs, transform=self.ax.transAxes)
+
+        self._pick_ev_id = self.fig.canvas.mpl_connect('pick_event', self._on_pick)
+
+        self._update_text_func = self._update_text
+
+        height = 0.04
+        self.bbox = Bbox.from_extents(x, y, x+0.25, y+height)
+        self.xy = (x, y)
+        
+
+
+    def _on_pick(self, event):
+
+        if event.mouseevent.button == 1:
+            if event.artist == self.frame:
+                self.drag(event)
+                   
+    def set_update_textfunc(self, func):
+        self._update_text_func = func
+
+    def update_text(self, text):
+        return self._update_text_func(text)
+
+    def _update_text(self, text):
+        vis = self.frame.get_visible()
+        self.frame.set(visible=True)
+        self.frame.set(text = text)
+        xy0 = self.frame.get_unitless_position()
+        bbox = self.get_bbox()
+        dh = bbox.height - self.bbox.height
+        new_y = xy0[1] - dh
+        self.frame.set(y = new_y)
+        self.frame.set(visible=vis)
+        self.bbox = bbox
+
+    def get_visible(self):
+        return self.frame.get_visible()
+
+    def get_bbox(self):  
+        cx = self.frame.get_window_extent().get_points()  # disp
+        bbox = transforms.Bbox(cx).transformed(self.ax.transAxes.inverted())  #ax
+        return bbox  # ax
+
+    def get_xy(self):
+        return self.frame.get_unitless_position()
+
+    def set_bbox(self, dikt):
+        self.frame.set_bbox(dikt)
+
+    def set(self, **kwargs):
+        self.frame.set(**kwargs)
+
+    def get_window_extent(self):
+        return self.frame.get_window_extent()
+        
+    def set_edgecolor(self, color):
+        self.frame_bbox.update({'edgecolor':color})
+        self.frame.set_bbox(self.frame_bbox)
+                        
+    def set_osc_bbox(self, dikt):
+        self.osc_bbox_prop = dikt
+        self._set_osc_bbox()
+
+    def _set_osc_bbox(self):
+        self.oscillo.set_bbox(self.osc_bbox_prop)
+
+
 
 class Move1Curr(MoveXY):
     """
@@ -476,20 +554,20 @@ class Move1Curr(MoveXY):
     def __init__(self, cxy, pos, label, labup='down',
                  pick_event='on', **kwargs):
         super().__init__()
-        x_pos = [0.04, 0.96]
-        y_pos = [0.03, 0.97]
+        x_pos = kwargs.get('x_pos', [0.04,  0.96])
+        y_pos = kwargs.get('y_pos', [0.013, 0.97])
 
         if labup in ['up', 'right']:
             labup = 'up'
         else:
             labup = 'down'
         
-        self.line_prop = dict(lw=1.5, ls='--', visible=True,
+        self.line_prop = dict(linewidth=1.5, linestyle='--', visible=True,
                               picker=True, pickradius=5, zorder=3)
 
         label_box = dict(facecolor='white', alpha=0.9, edgecolor='white')
-        self.label_prop = dict(ha='center', bbox=label_box,
-                picker=True, fontsize=10, fontweight='normal', visible=True)
+        self.label_prop = dict(picker=True, fontsize=10, fontweight='normal',
+                               visible=True, bbox=label_box)
         
         self.cxy = cxy
         self.cid = ''
@@ -497,18 +575,32 @@ class Move1Curr(MoveXY):
         self.yonly = True
         self.on_pick_button = 1
         self._visible = True
+        self.curr2 = None
+        self.razem = False 
         self.ax = None
         self.fig = None
         for (k, v) in kwargs.items():
-            if k in self.__dict__:
+            if k in self.__dict__ and k not in ['line_prop', 'label_prop']:
                 setattr(self, k, v)
+                
+        if 'line_prop' in kwargs:
+            for (k, v) in kwargs['line_prop'].items():
+                self.line_prop[k] = kwargs['line_prop'][k]
 
+        if 'label_prop' in kwargs:
+            for (k, v) in kwargs['label_prop'].items():
+                if k != 'bbox':
+                    self.label_prop[k] = kwargs['label_prop'][k]
+
+            if 'bbox' in kwargs['label_prop']:
+                for (k, v) in kwargs['label_prop']['bbox'].items():
+                    self.label_prop['bbox'][k] = kwargs['label_prop']['bbox'][k]
+            
+        
         if self.label_prop.get('label', 'N/A') != 'N/A':
             label = self.label_prop['label']
             self.label_prop.pop('label')
         
-        if self.label_prop.get('bbox', 'N/A') in ['N/A', None]:
-            self.label_prop['bbox'] = label_box
                                 
         if self.cxy == 'x':
             self.yonly = False
@@ -525,7 +617,8 @@ class Move1Curr(MoveXY):
 
             self.label_prop['transform'] = trans
             pos_lab = self._lpos[1] if labup in ['up', 'right'] else self._lpos[0]
-            self.label = self.ax.text(pos, pos_lab, label, **self.label_prop)
+            self.label = self.ax.text(pos, pos_lab, label, ha='center',
+                                      **self.label_prop)
         else:
             self.xonly = False
             if not any(map(lambda x: x in self.line_prop.keys(), ['c', 'color'])):
@@ -537,11 +630,12 @@ class Move1Curr(MoveXY):
 
             trans = transforms.blended_transform_factory(self.ax.transAxes,
                                                          self.ax.transData)
-            self._lpos = y_pos
-
+            # for easier styling purposes in main app
+            self._lpos = y_pos[::-1]  
             self.label_prop['transform'] = trans
-            pos_lab = self._lpos[1] if labup in ['up', 'right'] else self._lpos[0]
-            self.label = self.ax.text(pos_lab, pos, label, **self.label_prop)
+            pos_lab = self._lpos[0] if labup in ['up', 'right'] else self._lpos[1]
+            self.label = self.ax.text(pos_lab, pos, label, va='center',
+                                      **self.label_prop)
 
         if self.xonly and self.yonly:
             raise RuntimeWarning("'xonly' and 'yonly' can't be both eq 'True'")
@@ -555,7 +649,7 @@ class Move1Curr(MoveXY):
             self._pick_ev_id = self.fig.canvas.mpl_connect('pick_event', self._on_pick)
 
     def _on_pick(self, event):
-        if self.on_pick_button == 1:
+        if self.on_pick_button == event.mouseevent.button:
             if event.artist == self.line:
                 self.drag(event)
 
@@ -578,10 +672,6 @@ class Move1Curr(MoveXY):
             if xs <= self.x <= xe:
                 is_in = True
         return is_in
-
-
-    def set_label_bbox(self, dikt):
-        self.label.set_bbox(dikt)
 
     @property    
     def artist(self):
@@ -643,6 +733,13 @@ class Move1Curr(MoveXY):
         """ this can also be in addfunc """
         self.fig.canvas.draw()
 
+    @property
+    def razem(self):
+        return self._razem
+
+    @razem.setter
+    def razem(self, value):
+        self._razem = value if value in [True, False, 0 ,1] else False
 
     def get_position(self):
         if self.xonly:
@@ -683,6 +780,10 @@ class Move1Curr(MoveXY):
             self.line.set_ydata([y])
             self.label.set(y=y)
 
+    def set_color(self, color):
+        self.line.set(color=color)
+        self.label.set(color=color)
+
 
 
 class Move2Curr(MoveXY):
@@ -695,7 +796,8 @@ class Move2Curr(MoveXY):
     And that's what the fork is for.
     """
     def __init__(self, cxy, lab1, lab2, pos1=None, pos2=None, razem=False,
-                 labup='down', pick_event='on', buttons=False, **kwargs):
+                 labup='down', pick_event='on', buttons=False, oscillo=True, 
+                 **kwargs):
         super().__init__(**kwargs)
         x_pos = [0.04, 0.96]
         y_pos = [0.03, 0.97]
@@ -706,21 +808,23 @@ class Move2Curr(MoveXY):
         label_box = dict(facecolor='white', alpha=0.9, edgecolor='white')
         self.label_prop = dict(ha='center', bbox=label_box,
                 picker=True, fontsize=10, fontweight='normal', visible=True)
-        
+
         self.cxy = cxy
         self.cid1 = '1'
         self.cid2 = '2'
         self.xonly = True
         self.yonly = True
+        self.icons = True   # oscillo icons respond
         if self.cxy == 'x':
             self.yonly = False
         else:
             self.xonly = False
         self.on_pick_button = 1
         self._visible = True
+        self.razem = razem        # razem - only movement
         self.toggle_vis = True
         self.buttons = buttons
-        self.razem = razem  
+        self.is_oscillo = oscillo
         self.ax = None            # obligatory in kwargs: ax=ax
         self.fig = None           # obligatory in kwargs: fig=fig
         for (k, v) in kwargs.items():
@@ -745,6 +849,9 @@ class Move2Curr(MoveXY):
         self.c1 = Move1Curr(cxy, 0, lab1, cid=self.cid1, **kwargs)       
         self.c2 = Move1Curr(cxy, 0, lab2, cid=self.cid2, **kwargs)
 
+        self.c1.curr2 = self.c2
+        self.c2.curr2 = self.c1
+
         x1, x2, _, _ = self.sro4cur(self.c1)
 
         if self.cxy == 'x':
@@ -754,7 +861,15 @@ class Move2Curr(MoveXY):
             self.c1.y = x2
             self.c2.y = x1
 
+        if pos1 != None:
+            self.c1.x = pos1
+
+        if pos2 != None:
+            self.c2.x = pos2
+
         self.dxy = 0
+
+        self._update_osc_func = self._update_osc
         
         self.c1.set_prefunc(self.__prefunc)
         self.c2.set_prefunc(self.__prefunc)
@@ -767,27 +882,38 @@ class Move2Curr(MoveXY):
         if pick_event == 'on':
             self._pick_ev_id = self.fig.canvas.mpl_connect('pick_event', self._on_pick)
 
-    
-        """
-        oscilloscope like indicator
+        if self.is_oscillo:
+            """
+            oscilloscope like indicator
 
-        for signal pre-processing
-        """
-        oscx_pos = (0.02, 0.91)
-        oscy_pos = (0.39, 0.91)
-        osc_pos = oscx_pos if self.cxy == 'x' else oscy_pos
+            for signal pre-processing
+            """
+            oscx_pos = kwargs.get('osc_pos', (0.02, 0.91))
+            oscy_pos = kwargs.get('osc_pos', (0.39, 0.91))
+            
+            osc_pos = oscx_pos if self.cxy == 'x' else oscy_pos
 
-        osc_box_prop = dict(facecolor='white', alpha=0.9,
-                        edgecolor='blue' if self.cxy == 'x' else 'red')
-        osc_text_ln1 =   "x1 =        , ∆x =        "
-        osc_text_ln2 = "\nx2 =        , [―][―]  >||<"
+            osc_pos = kwargs.get('osc_pos', osc_pos)
 
-        osc_text = osc_text_ln1 + osc_text_ln2
+            osc_box_prop = kwargs.get('osc_box_prop',
+                                      dict(facecolor='white', alpha=0.9,
+                                           edgecolor='blue' if self.cxy == 'x' \
+                                           else 'red'))
+            self.osc_bbox_prop = osc_box_prop
 
-        self.oscillo = self.ax.text(*osc_pos, osc_text, color='black', fontsize=10,
-                           bbox=osc_box_prop, visible=True, picker=True, zorder=8,
-                           transform=self.ax.transAxes)
-        self.update_osc()
+            osc_text_ln1 =   "x1 =          ∆x =       "
+            osc_text_ln2 = "\nx2 =         [―][―]  >||<"
+
+            osc_text = osc_text_ln1 + osc_text_ln2
+
+            osc_txt_prop = kwargs.get('osc_txt_prop', dict(color='black', fontsize=10))
+
+            self.oscillo = self.ax.text(*osc_pos, osc_text, **osc_txt_prop,
+                               bbox=osc_box_prop, visible=True, picker=True, zorder=8,
+                               transform=self.ax.transAxes)
+            self.update_osc()
+        else:
+            self.oscillo = False
 
         """
         oscilloscope on/off buttons
@@ -839,8 +965,6 @@ class Move2Curr(MoveXY):
         if 'visible' in kwargs:
             self.visible = kwargs['visible']
 
-        
-
 
     def _on_click(self, event):
         """
@@ -866,7 +990,17 @@ class Move2Curr(MoveXY):
             self.fig.canvas.draw_idle()
         return
 
+    def set_update_oscfunc(self, func, icons=False):
+        self._update_osc_func = func
+        self.icons = icons
+
     def update_osc(self):
+        if self.is_oscillo:
+            return self._update_osc_func()
+
+    def _update_osc(self):
+        if not self.oscillo:
+            return
         dt = self.c2.x - self.c1.x
         if self.cxy == 'x':
             x = 'x'
@@ -877,7 +1011,7 @@ class Move2Curr(MoveXY):
         num_x1 = fmt_t.format(self.c1.x)
         num_x2 = fmt_t.format(self.c2.x)
         num_dt = fmt_t.format(dt)
-        osc_ln1 = x+"1 = "+num_x1+"    ∆"+x+" = " + num_dt
+        osc_ln1 = x+"1 = "+num_x1+"      ∆"+x+" = " + num_dt
         osc_ln2 = x+"2 = "+num_x2
         if self.razem:
             osc_ln2 += '      [══]       >||<'
@@ -902,7 +1036,11 @@ class Move2Curr(MoveXY):
         self.update_osc()
         if self._addfunc != None:
             self._addfunc()
- 
+
+    @TopVistoole.addfunc.setter
+    def addfunc(self, func):
+        self.c1.set_addfunc(func)
+        self.c2.set_addfunc(func)
         
     def _on_pick(self, event):
         
@@ -932,7 +1070,7 @@ class Move2Curr(MoveXY):
             How it's done and why - look at transforms.py source file in main
             matplotlib folder and of course READ_the_DOC !!!
             """
-            if event.artist == self.oscillo:
+            if event.artist == self.oscillo and self.icons:
                 osc_box = event.artist.get_bbox_patch().get_extents()
                 x_norm = (event.mouseevent.x - osc_box.x0) / osc_box.width
                 y_norm = (event.mouseevent.y - osc_box.y0) / osc_box.height
@@ -942,7 +1080,7 @@ class Move2Curr(MoveXY):
                             self.center = True      
                         else:
                             self.razem = not self.razem
-                            self.update_osc()
+                        self.update_osc()
                         self.fig.canvas.draw()
             
     
@@ -1010,10 +1148,6 @@ class Move2Curr(MoveXY):
         """  False if not both in win   """
         return self.c1.in_win and self.c1.in_win
 
-
-    def set_label_bbox(self, dikt):
-        self.label.set_bbox(dikt)
-
     @property    
     def artist(self):
         """   alias .line   """
@@ -1023,6 +1157,25 @@ class Move2Curr(MoveXY):
     def lpos(self):
         return self._lpos
 
+    def set_edgecolor(self, color):
+        self.osc_bbox_prop['edgecolor'] = color
+        self._set_osc_bbox()
+                        
+    def set_osc_bbox(self, dikt):
+        self.osc_bbox_prop = dikt
+        self._set_osc_bbox()
+
+    def _set_osc_bbox(self):
+        self.oscillo.set_bbox(self.osc_bbox_prop)
+
+    def set_label_bbox(self, dikt):
+        self.c1.label.set_bbox(dikt)
+        self.c2.label.set_bbox(dikt)
+
+    @property
+    def label(self):
+        return (self.c1.label, self.c2.label)
+
     @property
     def visible(self):
         return self._visible
@@ -1030,9 +1183,11 @@ class Move2Curr(MoveXY):
     def set_visible(self, vis):
         self.c1.visible = vis
         self.c2.visible = vis
-        self.oscillo.set(visible = vis)
+        if self.is_oscillo:
+            self.oscillo.set(visible = vis)
+            self.update_osc()
         self._visible = vis
-        self.fig.canvas.draw_idle()
+        self.fig.canvas.draw()
 
     def toggle_visible(self):
         self.set_visible(not self.visible)
@@ -1043,6 +1198,10 @@ class Move2Curr(MoveXY):
 
     def get_visible(self):
         return self._visible
+
+    def set_color(self, color):
+        self.c1.set_color(color=color)
+        self.c2.set_color(color=color)
 
     @property
     def razem(self):
@@ -1080,6 +1239,8 @@ class LegView(TopVistoole):
         self.fig = 0
         self.leg_addfunc = None
         self.leg_draggable = False
+        self.add2view = False
+        self.in1view = False
 
         for (k, v) in kwargs.items():
             if k in self.__dict__:
@@ -1121,6 +1282,8 @@ class LegView(TopVistoole):
         self.on_hov_id = self.fig.canvas.mpl_connect('motion_notify_event', self._on_hover)
 
         self.fig_ev_id = self.fig.canvas.mpl_connect('figure_leave_event', self.fig_leave)
+
+        self.key_ev_id = self.fig.canvas.mpl_connect('key_press_event', self._key_press)
 
         self.zz = [c for c in self.ax.xaxis.get_children() if isinstance(c, plt.Text)]
         self.zz += [c for c in self.ax.yaxis.get_children() if isinstance(c, plt.Text)]
@@ -1174,6 +1337,11 @@ class LegView(TopVistoole):
                     not lvl_box.contains(event.mouseevent.x, event.mouseevent.y):
                     self.legend_move()
 
+    def _key_press(self, event):
+        if event.key == 'shift':
+            if self.in1view:
+                self.add2view = True
+                self.legend.get_frame().set(linewidth=1.5)
 
     def legend_move(self):
         self.legend.set_draggable(True)
@@ -1182,33 +1350,66 @@ class LegView(TopVistoole):
 
 
     def leg_on_pick(self, event):
+        self.in1view = True
+        artist = event.artist
+        self._set_focus(artist)
+        self.fig.canvas.draw_idle()
+
+
+    def _set_focus(self, artist, add_func=True):
         for item in self.leg_labels:
-            if item == event.artist:            # leg_label picked
+            if item == artist:            # leg_label picked
                 self.artists[item][0].set_linewidth(self.active['ax_lw'])   # ax_line
                 self.artists[item][0].set_zorder(self.active['ax_zr'])
                 self.artists[item][0].set_alpha(self.active['ax_la'])
                 self.artists[item][1].set_alpha(self.active['lg_la'])     # leg_line
                 self.artists[item][2].set_alpha(self.active['lg_ba'])     # leg_label
-                
-                if self._addfunc != None:
+                if self._addfunc != None and add_func:
                     self._addfunc(item)
 
-            else:                     # every other artist but not that picked
-                self.artists[item][0].set_alpha(self.passiv['ax_la'])
-                self.artists[item][0].set_zorder(self.passiv['ax_zr'])
-                self.artists[item][1].set_alpha(self.passiv['lg_la'])   
-                self.artists[item][2].set_alpha(self.passiv['lg_ba'])   
-        self.fig.canvas.draw_idle()
+            elif not self.add2view:       # every other artist but not that picked
+                 self.set_one_mute(item)
+
+                
+    def set_one_mute(self, item):
+        self.artists[item][0].set_alpha(self.passiv['ax_la'])
+        self.artists[item][0].set_zorder(self.passiv['ax_zr'])
+        self.artists[item][1].set_alpha(self.passiv['lg_la'])   
+        self.artists[item][2].set_alpha(self.passiv['lg_ba'])
+
+    def set_all_mute(self):
+        for item in self.leg_labels:
+            self.set_one_mute(item)
+        
 
     def back_view(self):
+        self.in1view = False
+        self.add2view = False
+        self.legend.get_frame().set(linewidth=1)
         for item in self.leg_labels:
             self.artists[item][0].set_alpha(self.normal['ax_la'])
             self.artists[item][0].set_linewidth(self.normal['ax_lw'])
             self.artists[item][1].set_alpha(self.normal['lg_la'])  
             self.artists[item][2].set_alpha(self.normal['lg_ba'])
             self.fig.canvas.draw_idle()
+            
 
-    
+    def set_focus(self, *leg_items):
+        item = []
+        for i, k in enumerate(leg_items):
+            if isinstance(k, int):
+                item.append(self.leg_labels[k])
+            elif isinstance(leg_items[i], str):
+                item += [c for c in self.leg_labels if c.get_text() == leg_items[i]]
+        self.set_all_mute()
+        self.add2view = True
+        for i, k in enumerate(item):
+            self._set_focus(k, add_func=False)
+        self.add2view = False
+        self.fig.canvas.draw_idle()
+            
+                
+
 
 def Vistoole(toolsy, **kwargs):
     """
@@ -1253,7 +1454,8 @@ def Vistoole(toolsy, **kwargs):
         buttons = False
         if 'xb' in toolsy:
             buttons = True
-        cXX = Move2Curr('x', 'x1', 'x2', **plot_dict, buttons=buttons)
+        cXX = Move2Curr('x', 'x1', 'x2', **plot_dict, buttons=buttons,
+                        pos1=0.03, pos2=0.07,)
         
     if 'y' in toolsy:
         buttons = False
@@ -1402,10 +1604,10 @@ if __name__ == "__main__":
         curr in plot window and at least one end of signal hooks to the curr window
 
         """
-        if cXX.in_win and s1 < x2 and s2 > x1:    # out of curr window
+        if cXX.in_win and s1 < x2 and s2 > x1:    
             idx1 = np.nonzero(ax_line_x >= x1)[0][0]
             idx2 = np.nonzero(ax_line_x <= x2)[0][-1]            
-        elif calc_values:
+        elif calc_values:                                # out of curr window
             cXX.visible = False
             idx1 = np.nonzero(ax_line_x >= xs)[0][0]
             idx2 = np.nonzero(ax_line_x <= xe)[0][-1]
@@ -1436,6 +1638,19 @@ if __name__ == "__main__":
                     color='darkgreen', fontsize=12, fontweight='bold',
                     transform=ax.transAxes)
 
+    frame_prop = dict(fontsize=12, color='black', fontweight='normal',
+                      fig=fig, ax=ax, picker=True,
+                      bbox = dict(facecolor='beige', alpha=0.95, 
+                      edgecolor='fuchsia', linewidth=2))
+    
+    calc_text_ln1 =   "x1 =        , ∆t =        "
+    calc_text_ln2 = "\nx2 =        ,   f =      "
+
+    # tylko dla zmierzenia wysokosci jednej linijki
+    calc_text = calc_text_ln1 + calc_text_ln2  
+
+
+    myt = TextFrame(0.4, 0.5, calc_text, **frame_prop)
 
 
 
@@ -1451,15 +1666,15 @@ if __name__ == "__main__":
     
     np.random.seed(19680801)
 
-    dt = 0.01
-    t = np.arange(0, 5, dt)
+    dt = 0.001
+    t = np.arange(0, 1, dt)
     nse1 = np.random.randn(len(t))                 
     nse2 = np.random.randn(len(t))                 
 
     s1 = np.sin(2 * np.pi * 10 * t) + nse1
     s2 = np.sin(2 * np.pi * 10 * t) + nse2
-    s3 = np.sin(2 * np.pi * 1 * t)
-    s4 = np.sin(2 * np.pi * 5 * t)*1.5
+    s3 = np.sin(2 * np.pi * 10 * t)
+    s4 = np.sin(2 * np.pi * 50 * t)*1.5
 
     ax.plot(t, s1, label='s1')
     ax.plot(t, s2, label='s2')
@@ -1467,7 +1682,7 @@ if __name__ == "__main__":
     ax.plot(t, s4, label='s4')
 
 
-    ax.set_xlim(0, 2)
+    ax.set_xlim(0, 0.1)
     ax.grid(True)
 
     x_label = ax.set_xlabel('Time (s)')
@@ -1486,8 +1701,10 @@ if __name__ == "__main__":
                                         |       |   must be placed in fig area
                                        \|/     \|/
     """                                
-    cXX, cYY, cBB, legV = Vistoole('xylegtm', tm=[txt1, txt2], fig=fig, ax=ax, 
+    cXX, cYY, cBB, legV = Vistoole('xylegtm', tm=[txt1, txt2], fig=fig, ax=ax,
                                    leg_addfunc=add_leg_event)
+    # position or label name
+    legV.set_focus(2, 's4')
 
 #####################                                         #####################    
 #####################  just before plt.show()  instruction    #####################
